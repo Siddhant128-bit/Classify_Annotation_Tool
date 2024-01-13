@@ -10,4 +10,4 @@
 
 <h3><b>User credentials:</b><br></h3>
 <b>username:</b> user<br>
-<b>pw:</b> fuser
+<b>pw:</b> fuseuser
