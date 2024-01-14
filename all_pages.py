@@ -3,48 +3,62 @@ import os
 import shutil
 import zipfile
 import json
+from streamlit_shortcuts import add_keyboard_shortcuts
 
-def dump_current_frame(choice):
+def remove_completed_task_from_db(path_of_folder):
+    """Remove completed task from the database."""
+    try:
+        for file in os.listdir(path_of_folder):
+            os.remove(os.path.join(path_of_folder, file))
+    
+        os.rmdir(path_of_folder)
+    except:
+        pass
+
+def dump_current_frame(choice, dataset_path, files_list, flag):
     """Dump the current frame (choice) to a JSON file."""
+    folder_name = dataset_path.split('/')[-1]
+
+    # Create necessary directories
+    output_folder = f'data/Aug_{folder_name}/{flag}'
+    os.makedirs(output_folder, exist_ok=True)
+
+    # Copy the selected file to the output directory
+    shutil.copy(os.path.join(dataset_path, files_list[choice]), os.path.join(output_folder, files_list[choice]))
+
+    # Save the current frame information to a JSON file
     with open('current_frame.json', 'w') as f:
         json.dump({'current_frame': choice}, f)
 
 def root_data_folder(folder_name='0'):
     """Create the 'data' folder and a subfolder based on the batch number."""
-    try:
-        os.mkdir('data')
-    except FileExistsError:
-        pass
-
-    try:
-        os.mkdir(f'data/{folder_name}')
-    except FileExistsError:
-        pass
+    os.makedirs('data', exist_ok=True)
+    os.makedirs(f'data/{folder_name}', exist_ok=True)
 
 def load_data(uploaded_file, batch_number):
     """Load data from a ZIP file to the specified batch folder."""
-    if not batch_number:
-        batch_number = '0'
+    batch_number = batch_number or '0'
 
     root_data_folder(batch_number)
+
+    # Extract files from the uploaded ZIP folder
     with zipfile.ZipFile(uploaded_file, 'r') as zip_ref:
         zip_ref.extractall('uploaded_folder')
 
     dest_folder_path = os.path.join("data", batch_number)
     original_folder_path = os.path.join('uploaded_folder', os.listdir('uploaded_folder')[0])
 
+    # Move files from the temporary folder to the destination folder
     for file in os.listdir(original_folder_path):
         shutil.move(os.path.join(original_folder_path, file), os.path.join(dest_folder_path, file))
 
     st.success(f'Successfully Created here {dest_folder_path}')
 
     # Remove the uploaded_folder
-    [os.rmdir(os.path.join(os.path.abspath('uploaded_folder'), file)) for file in os.listdir(os.path.abspath('uploaded_folder'))]
-    os.rmdir('uploaded_folder')
+    shutil.rmtree('uploaded_folder')
 
-    total_batches = os.listdir('data')
-    
-    # Attempt to load the last selected option
+    total_batches = [file for file in os.listdir('data') if 'Aug_' not in file]
+
     try:
         with open('loaded_option.json', 'r') as f:
             chosen_option = json.load(f)['chosen_option'].split('/')[-1]
@@ -52,6 +66,8 @@ def load_data(uploaded_file, batch_number):
     except (FileNotFoundError, KeyError, ValueError):
         index_val = 0
 
+    # Display options to choose the loaded dataset
+    st.write('chose the data for annotators to annotate: ')
     option = st.selectbox(
         "Load Dataset",
         total_batches,
@@ -59,11 +75,11 @@ def load_data(uploaded_file, batch_number):
         placeholder="Loaded_Dataset",
     )
     load_button = st.button('Load Data')
+    
     if load_button:
-        # Save the selected option to a JSON file
         selected_option_path = os.path.join(os.path.abspath('data'), option)
         with open('loaded_option.json', 'w') as json_file:
-            json.dump({'chosen_option': selected_option_path, 'status': 'todo'}, json_file)
+            json.dump({'chosen_option': selected_option_path, 'status': 'todo', 'files_list': os.listdir(selected_option_path)}, json_file)
         st.success(f'Successfully Loaded data {selected_option_path}')
 
 def user_operations():
@@ -72,11 +88,14 @@ def user_operations():
         dataset_dictionary = json.load(f)
 
     dataset_status = dataset_dictionary.get('status', 'todo')
+    files_list = dataset_dictionary['files_list']
+    dataset_path = dataset_dictionary.get('chosen_option', '')
+    
     if dataset_status == 'todo':
-        dataset_path = dataset_dictionary.get('chosen_option', '')
         if dataset_path:
-            all_files = os.listdir(dataset_path)
-            total_files = len(all_files)
+            total_files = len(files_list)
+
+            # Display progress information
             progress_text = st.empty()
             my_bar = st.progress(0)
 
@@ -86,31 +105,83 @@ def user_operations():
             except (FileNotFoundError, KeyError):
                 choice = 0
 
-            st.text(f'{choice + 1} / {total_files}')
+            st.text(f'{choice+1} / {total_files-1}')
+            st.image(os.path.join(dataset_path, files_list[choice]))
 
-            next_btn = st.button('Next Button')
-            if next_btn:
+            # Buttons for user interaction
+            touch_btn = st.button('Touch (Right)')
+            notouch_btn = st.button('No Touch (Left)')
+            noball_btn = st.button('No Ball (Down)')
+            add_keyboard_shortcuts({
+                'ArrowLeft': 'No Touch (Left)',
+                'ArrowDown': 'No Ball (Down)',
+                'ArrowRight': 'Touch (Right)',
+            })
+
+            if any([touch_btn, notouch_btn, noball_btn]):
+                if touch_btn:
+                    flag = 'touch'
+                elif notouch_btn:
+                    flag = 'notouch'
+                else:
+                    flag = 'noball'
+
+                # Update choice and dump the current frame
                 choice += 1
-                dump_current_frame(choice)
-                print(choice)
+                dump_current_frame(choice, dataset_path, files_list, flag)
                 my_bar.progress(choice / total_files)
 
-            if len(all_files) <= choice:
+            # Check if all files are processed
+            if len(files_list) - 1 <= choice:
                 my_bar.empty()
                 progress_text.empty()
                 choice = 0
-                dump_current_frame(choice)
+                dump_current_frame(choice, dataset_path, files_list, flag)
                 dataset_dictionary['status'] = 'complete'
                 with open('loaded_option.json', 'w') as json_file:
                     json.dump(dataset_dictionary, json_file)
     else:
         st.write('No Task Allocated !!')
+        remove_completed_task_from_db(dataset_path)
 
 def render_admin_pages(name):
     """Render admin pages."""
     st.title(f'Welcome {name}')
+    
+    try:
+        # Display completed batches and provide an option to download annotations
+        completed_batches = [file for file in os.listdir('data') if 'Aug_' in file]
+        st.subheader("Download Annotations: ")
+        option_complete = st.selectbox(
+            "Choose Annotated Data to Download",
+            completed_batches,
+            index=None,
+            placeholder='Annotated Data',
+        )
+
+        if option_complete:
+            selected_option_path = os.path.join(os.path.abspath('data'), option_complete)
+            zip_file_path = option_complete
+            zip_file_name = f'{zip_file_path}.zip'
+            shutil.make_archive(zip_file_path, 'zip', selected_option_path)
+
+            with open(zip_file_name, "rb") as fp:
+                btn = st.download_button(
+                    label=f"Download {zip_file_path}.zip",
+                    data=fp,
+                    key=f"download_button_{zip_file_path}",  # Ensure a unique key for each download button
+                    file_name=f"{zip_file_path}.zip",  # Set the filename for the downloaded file
+                )
+            os.remove(zip_file_name)
+
+    except Exception as e:
+        pass
+    
+    # Display an input box for batch number and a file uploader for ZIP files
+    st.subheader('Assign Task')
     batch_number = st.text_input('Enter Batch Number')
     uploaded_file = st.file_uploader('Choose Zip File (all images)', type=['zip'])
+    
     if uploaded_file is not None:
         load_data(uploaded_file, batch_number)
 
