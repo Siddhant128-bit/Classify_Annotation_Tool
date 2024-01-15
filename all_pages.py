@@ -4,6 +4,7 @@ import shutil
 import zipfile
 import json
 from streamlit_shortcuts import add_keyboard_shortcuts
+from streamlit_autorefresh import st_autorefresh
 
 def remove_completed_task_from_db(path_of_folder):
     """Remove completed task from the database."""
@@ -18,17 +19,21 @@ def remove_completed_task_from_db(path_of_folder):
 def dump_current_frame(choice, dataset_path, files_list, flag):
     """Dump the current frame (choice) to a JSON file."""
     folder_name = dataset_path.split('/')[-1]
+    n_frame = choice + 1
+    try:
+        # Create necessary directories
+        output_folder = f'data/Aug_{folder_name}/{flag}'
+        os.makedirs(output_folder, exist_ok=True)
 
-    # Create necessary directories
-    output_folder = f'data/Aug_{folder_name}/{flag}'
-    os.makedirs(output_folder, exist_ok=True)
+        # Copy the selected file to the output directory
+        shutil.copy(os.path.join(dataset_path, files_list[choice]), os.path.join(output_folder, files_list[choice]))
 
-    # Copy the selected file to the output directory
-    shutil.copy(os.path.join(dataset_path, files_list[choice]), os.path.join(output_folder, files_list[choice]))
-
+    except:
+        pass
+    
     # Save the current frame information to a JSON file
     with open('current_frame.json', 'w') as f:
-        json.dump({'current_frame': choice}, f)
+        json.dump({'current_frame': n_frame}, f)
 
 def root_data_folder(folder_name='0'):
     """Create the 'data' folder and a subfolder based on the batch number."""
@@ -67,7 +72,7 @@ def load_data(uploaded_file, batch_number):
         index_val = 0
 
     # Display options to choose the loaded dataset
-    st.write('chose the data for annotators to annotate: ')
+    st.write('Choose the data for annotators to annotate:')
     option = st.selectbox(
         "Load Dataset",
         total_batches,
@@ -84,65 +89,93 @@ def load_data(uploaded_file, batch_number):
 
 def user_operations():
     """Perform user operations based on the loaded dataset."""
-    with open('loaded_option.json', 'r') as f:
-        dataset_dictionary = json.load(f)
+    try:
+        with open('loaded_option.json', 'r') as f:
+            dataset_dictionary = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        st.write("Error loading dataset.")
+        return
 
     dataset_status = dataset_dictionary.get('status', 'todo')
-    files_list = dataset_dictionary['files_list']
+    files_list = dataset_dictionary.get('files_list', [])
     dataset_path = dataset_dictionary.get('chosen_option', '')
-    
-    if dataset_status == 'todo':
-        if dataset_path:
-            total_files = len(files_list)
 
+    if not files_list or not dataset_path:
+        st.write("Dataset information missing.")
+        return
+
+    total_files = len(files_list)
+    completed = False
+
+    if dataset_status == 'todo':
+        # Get the current frame choice
+        try:
+            with open('current_frame.json', 'r') as f:
+                choice = json.load(f).get('current_frame', 0)
+        except (FileNotFoundError, KeyError, json.JSONDecodeError):
+            choice = 0
+
+        if choice < total_files:
             # Display progress information
             progress_text = st.empty()
-            my_bar = st.progress(0)
+            my_bar = st.progress(choice / total_files)
 
+            st.text(f'{choice + 1} / {total_files}')
             try:
-                with open('current_frame.json', 'r') as f:
-                    choice = json.load(f)['current_frame']
-            except (FileNotFoundError, KeyError):
-                choice = 0
-
-            st.text(f'{choice+1} / {total_files-1}')
-            st.image(os.path.join(dataset_path, files_list[choice]))
+                st.write(files_list[choice])
+                st.image(os.path.join(dataset_path, files_list[choice]))
+            except:
+                pass
 
             # Buttons for user interaction
             touch_btn = st.button('Touch (Right)')
             notouch_btn = st.button('No Touch (Left)')
             noball_btn = st.button('No Ball (Down)')
+
             add_keyboard_shortcuts({
                 'ArrowLeft': 'No Touch (Left)',
                 'ArrowDown': 'No Ball (Down)',
                 'ArrowRight': 'Touch (Right)',
             })
 
-            if any([touch_btn, notouch_btn, noball_btn]):
+            if touch_btn or notouch_btn or noball_btn:
                 if touch_btn:
                     flag = 'touch'
                 elif notouch_btn:
                     flag = 'notouch'
-                else:
+                elif noball_btn:
                     flag = 'noball'
 
                 # Update choice and dump the current frame
+                dump_current_frame(choice, dataset_path, files_list, flag)
                 choice += 1
-                dump_current_frame(choice, dataset_path, files_list, flag)
-                my_bar.progress(choice / total_files)
+                st_autorefresh(interval=1,limit=2)
+                if choice >= total_files:
+                    completed = True
+                else:
+                    my_bar.progress(choice / total_files)
+                    st.text(f'{choice + 1} / {total_files}')
+                    st.write(files_list[choice])
+                    st.image(os.path.join(dataset_path, files_list[choice]))
 
-            # Check if all files are processed
-            if len(files_list) - 1 <= choice:
-                my_bar.empty()
-                progress_text.empty()
-                choice = 0
-                dump_current_frame(choice, dataset_path, files_list, flag)
-                dataset_dictionary['status'] = 'complete'
-                with open('loaded_option.json', 'w') as json_file:
-                    json.dump(dataset_dictionary, json_file)
+        else:
+            completed = True
+            dataset_dictionary['status'] = 'complete'
+            with open('current_frame.json', 'w') as f:
+                json.dump({'current_frame': 0}, f)
+            with open('loaded_option.json', 'w') as json_file:
+                json.dump(dataset_dictionary, json_file)
+            remove_completed_task_from_db(dataset_path)
+            
+            st.write("Batch complete ")
+            
     else:
-        st.write('No Task Allocated !!')
-        remove_completed_task_from_db(dataset_path)
+        completed = True
+        st.write('No Task Allocated!')
+        
+    if completed:
+        st.balloons()
+        st.write("All files have been covered. The task is complete.")
 
 def render_admin_pages(name):
     """Render admin pages."""
@@ -188,7 +221,4 @@ def render_admin_pages(name):
 def render_user_pages(name):
     """Render user pages."""
     st.title(f'Welcome {name}')
-    try:
-        user_operations()
-    except:
-        st.write('No Task Allocated !!')
+    user_operations()
