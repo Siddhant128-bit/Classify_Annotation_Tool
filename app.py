@@ -31,7 +31,9 @@ name, authentication_status, username = authenticator.login('Login', 'main')
 
 # Handle authentication status
 if authentication_status:
-    authenticator.logout('Logout', 'main')
+    col1,col2,col3=st.columns(3)
+    with col3:
+        authenticator.logout('Logout', 'main')
 
     # Determine user type and render appropriate pages
     if name.lower() == 'admin':

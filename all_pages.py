@@ -16,7 +16,20 @@ def remove_completed_task_from_db(path_of_folder):
     except:
         pass
 
-def dump_current_frame(choice, dataset_path, files_list, flag):
+def get_action_name(string_val):
+    if '/' not in string_val:
+        return string_val
+    
+    else: 
+        string_val=string_val.split('/')
+        if 'touch' in string_val:
+            return 'touch'
+        elif 'noball' in string_val:
+            return 'noball'
+        elif 'notouch' in string_val:
+            return 'notouch'
+
+def create_class_folder(choice, dataset_path,meta_data, flag):
     """Dump the current frame (choice) to a JSON file."""
     folder_name = dataset_path.split('/')[-1]
     n_frame = choice + 1
@@ -26,8 +39,13 @@ def dump_current_frame(choice, dataset_path, files_list, flag):
         os.makedirs(output_folder, exist_ok=True)
 
         # Copy the selected file to the output directory
-        shutil.copy(os.path.join(dataset_path, files_list[choice]), os.path.join(output_folder, files_list[choice]))
-
+        #shutil.copy(os.path.join(dataset_path, files_list[choice]), os.path.join(output_folder, files_list[choice]))
+        
+        meta_data[list(meta_data.keys())[choice]]=os.path.join(output_folder, list(meta_data.keys())[choice].split('/')[-1])
+        
+        with open('all_files_metadata.json','w') as f:
+            json.dump(meta_data,f)
+        
     except:
         pass
     
@@ -51,11 +69,11 @@ def load_data(uploaded_file, batch_number):
         zip_ref.extractall('uploaded_folder')
 
     dest_folder_path = os.path.join("data", batch_number)
-    original_folder_path = os.path.join('uploaded_folder', os.listdir('uploaded_folder')[0])
+    original_folder_path = 'uploaded_folder'
 
     # Move files from the temporary folder to the destination folder
     for file in os.listdir(original_folder_path):
-        shutil.move(os.path.join(original_folder_path, file), os.path.join(dest_folder_path, file))
+        shutil.copy(os.path.join(original_folder_path, file), os.path.join(dest_folder_path, file))
 
     st.success(f'Successfully Created here {dest_folder_path}')
 
@@ -83,15 +101,40 @@ def load_data(uploaded_file, batch_number):
     
     if load_button:
         selected_option_path = os.path.join(os.path.abspath('data'), option)
+        #Creating a metadata for putting all the jsons where it needs to be placed
+
+        all_raw_files=os.listdir(selected_option_path)
+        all_raw_files=[os.path.join(selected_option_path,i) for i in all_raw_files]
+        to_move_locations=['not_decided' for i in range(len(all_raw_files))]
+        all_files=dict(zip(all_raw_files,to_move_locations))
+        with open('all_files_metadata.json','w') as json_file:
+            json.dump(all_files,json_file)
+
+
         with open('loaded_option.json', 'w') as json_file:
             json.dump({'chosen_option': selected_option_path, 'status': 'todo', 'files_list': os.listdir(selected_option_path)}, json_file)
         st.success(f'Successfully Loaded data {selected_option_path}')
 
+def dump_current_frame_info(frame_no):
+    with open('current_frame.json', 'w') as f:
+        json.dump({'current_frame': frame_no}, f)
+
+def move_all_files_from_metadata(path_of_metadata):
+    with open(path_of_metadata,'r') as f:
+        metadata=json.load(f)
+    
+    for both_source_destination in metadata.items():
+        shutil.move(both_source_destination[0],both_source_destination[1])
+
+    #os.remove(path_of_metadata)
 def user_operations():
     """Perform user operations based on the loaded dataset."""
     try:
         with open('loaded_option.json', 'r') as f:
             dataset_dictionary = json.load(f)
+        
+        with open('all_files_metadata.json','r') as f:
+            all_files_metadata=json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         st.write("Error loading dataset.")
         return
@@ -99,6 +142,7 @@ def user_operations():
     dataset_status = dataset_dictionary.get('status', 'todo')
     files_list = dataset_dictionary.get('files_list', [])
     dataset_path = dataset_dictionary.get('chosen_option', '')
+    
 
     if not files_list or not dataset_path:
         st.write("Dataset information missing.")
@@ -106,31 +150,72 @@ def user_operations():
 
     total_files = len(files_list)
     completed = False
-
-    if dataset_status == 'todo':
+    if dataset_status=='todo':
         # Get the current frame choice
         try:
             with open('current_frame.json', 'r') as f:
                 choice = json.load(f).get('current_frame', 0)
         except (FileNotFoundError, KeyError, json.JSONDecodeError):
             choice = 0
+        
+        col1, col2, col3 = st.columns(3)
+
+        # this will put a button in the middle column
+        with col1:
+            back_btn=st.button('Back(a)')
+        
+        with col3:
+            forward_btn=st.button('Forward(d)')
+        
+        if back_btn:
+            choice=choice-1
+            if choice!=-1:
+                dump_current_frame_info(choice)
+            else:
+                choice=0
+                dump_current_frame_info(choice)
+
+        if forward_btn:
+            choice=choice+1
+            dump_current_frame_info(choice)
+
+        add_keyboard_shortcuts({
+                'a': 'Back(a)',
+                'd': 'Forward(d)',
+                'A': 'Back(a)',
+                'D': 'Forward(d)'
+            })
+
 
         if choice < total_files:
             # Display progress information
-            progress_text = st.empty()
             my_bar = st.progress(choice / total_files)
-
+                
             st.text(f'{choice + 1} / {total_files}')
             try:
-                st.write(files_list[choice])
-                st.image(os.path.join(dataset_path, files_list[choice]))
+                file_name=list(all_files_metadata.keys())[choice].split('/')[-1]
+                file_status=get_action_name(list(all_files_metadata.values())[choice])
+                coll1,colr2=st.columns(2)
+                with coll1:
+                    st.subheader(f'file_no: {choice+1}',divider='rainbow')
+
+                with colr2:
+                    st.subheader(f'annotation: {file_status}',divider='rainbow'),
+                #st.header(f'file: {file_name} <---------------------------->  annotation: {file_status}')
+                st.image(list(all_files_metadata.keys())[choice])
             except:
                 pass
 
-            # Buttons for user interaction
-            touch_btn = st.button('Touch (Right)')
-            notouch_btn = st.button('No Touch (Left)')
-            noball_btn = st.button('No Ball (Down)')
+            # Buttons for user interaction,
+            # Make it such that we save the meta data in json format.
+            col4,col5,col6=st.columns(3)
+            with col4:
+                notouch_btn = st.button('No Touch (Left)')
+            with col6:
+                touch_btn = st.button('Touch (Right)')
+            with col5:
+                noball_btn = st.button('No Ball (Down)')
+
 
             add_keyboard_shortcuts({
                 'ArrowLeft': 'No Touch (Left)',
@@ -147,7 +232,7 @@ def user_operations():
                     flag = 'noball'
 
                 # Update choice and dump the current frame
-                dump_current_frame(choice, dataset_path, files_list, flag)
+                create_class_folder(choice, dataset_path,all_files_metadata, flag)
                 choice += 1
                 st_autorefresh(interval=1,limit=2)
                 if choice >= total_files:
@@ -156,24 +241,27 @@ def user_operations():
                     my_bar.progress(choice / total_files)
                     st.text(f'{choice + 1} / {total_files}')
                     st.write(files_list[choice])
-                    st.image(os.path.join(dataset_path, files_list[choice]))
-
+                    st.image(list(all_files_metadata.keys())[choice])
         else:
-            completed = True
-            dataset_dictionary['status'] = 'complete'
+            choice=total_files
             with open('current_frame.json', 'w') as f:
-                json.dump({'current_frame': 0}, f)
-            with open('loaded_option.json', 'w') as json_file:
-                json.dump(dataset_dictionary, json_file)
-            remove_completed_task_from_db(dataset_path)
+                json.dump({'current_frame': choice}, f)
+            st.subheader('\n\nAnnotation Complete Please Review annotations then press save !!\n\n\n',divider='blue')
+            col9,col10,col11=st.columns(3)
+            with col10:
+                save_and_end_all=st.button('Save Button')
             
-            st.write("Batch complete ")
-            
+            if save_and_end_all:
+                dataset_dictionary['status'] = 'complete'
+                with open('current_frame.json', 'w') as f:
+                    json.dump({'current_frame': 0}, f)
+                with open('loaded_option.json', 'w') as json_file:
+                    json.dump(dataset_dictionary, json_file)
+                
+                st_autorefresh(interval=1,limit=2)
+                move_all_files_from_metadata('all_files_metadata.json')
+                remove_completed_task_from_db(dataset_path)
     else:
-        completed = True
-        st.write('No Task Allocated!')
-        
-    if completed:
         st.balloons()
         st.write("All files have been covered. The task is complete.")
 
@@ -220,5 +308,5 @@ def render_admin_pages(name):
 
 def render_user_pages(name):
     """Render user pages."""
-    st.title(f'Welcome {name}')
+    st.subheader(f'Welcome {name}',divider='red')
     user_operations()
